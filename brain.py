@@ -121,7 +121,7 @@ def facts_text(group):
     return "\n".join(f"[S{i+1}] {a['title']} — {a['summary']}" for i, a in enumerate(group))
 
 
-LINE = re.compile(r"^\W*(BULL|BEAR|ANALYTICS|ASSET)\W*[:：]\s*(.+)$", re.I)
+LINE = re.compile(r"^[\W\d_]*(BULL|BEAR|ANALYTICS|ASSET)\s*(?:\([^)]*\))?\W*[:：]\s*(.+)$", re.I)
 
 
 def parse(text, allowed):
@@ -248,18 +248,50 @@ def write_script(topic, group, target_min=112, max_sections=26):
     return lines
 
 
+def short_line(who, task, topic, facts):
+    t = llm(f"Topic: {topic}\nNews facts:\n{facts}\n\nYou are {who} in a finance debate show. {task}\n"
+            f"Reply with the spoken words only: plain English, no name label, no quotes, no markdown, maximum 22 words.",
+            tokens=90, temp=0.8)
+    t = t.strip().splitlines()[0] if t.strip() else ""
+    t = re.sub(r"^[\W\d_]*(BULL|BEAR|ANALYTICS|ASSET)\s*(?:\([^)]*\))?\W*[:：]\s*", "", t, flags=re.I)
+    t = re.sub(r"[*_#`\"]+", "", t).strip()
+    words = t.split()
+    if len(words) < 4:
+        return None
+    t = " ".join(words[:26])
+    return t if t[-1] in ".!?" else t + "."
+
+
 def write_short(topic, group):
     facts = facts_text(group[:3])
-    t = llm(f"""Write a 50-second finance debate for a YouTube Short. Topic: {topic}
-Facts:
-{facts}
-Output exactly 8 lines, each starting with a name and colon, in this order: ASSET (one sentence: today's topic and the guests), ANALYTICS (deep, sharp question),
-BULL (benefit, 2 sentences), BEAR (drawback, 2 sentences), BULL (rebuttal, 1 sentence), BEAR (rebuttal, 1 sentence),
-ANALYTICS (neutral verdict), ANALYTICS (asks viewers which side they are on). Plain spoken English, under 22 words per line.""", tokens=600)
-    ls = parse(t, {"ASSET", "ANALYTICS", "BULL", "BEAR"})
-    if len(ls) < 5:
-        raise RuntimeError("short script failed")
-    return ls[:9]
+    plan = [
+        ("ASSET", "Open the show in one sentence: say I'm Asset, state today's topic, and name the guests Analytics, Bull and Bear.",
+         f"Welcome to the show. I'm Asset, and today's topic is {topic}. Joining me are Analytics, Bull and Bear."),
+        ("ANALYTICS", "Ask one sharp, deep question about this news.",
+         "What does this news really mean for ordinary investors, and who is affected first?"),
+        ("BULL", "Explain the main benefit or opportunity in this news, using one fact from the news facts.",
+         "The upside is real: sudden moves create opportunities for patient investors who prepare early. [S1]"),
+        ("BEAR", "Explain the main drawback or risk in this news, using one fact from the news facts.",
+         "The downside is just as real: shocks like this can wipe out leveraged traders and spread fear fast. [S1]"),
+        ("BULL", "Rebut Bear in one sentence.",
+         "Fear is not a strategy. Markets have recovered from bigger shocks before."),
+        ("BEAR", "Rebut Bull in one sentence.",
+         "Past recoveries are no guarantee. Ignoring risk is how people lose everything."),
+        ("ANALYTICS", "Give a fair, neutral verdict in one sentence, taking no side.",
+         "Both sides have a point: the opportunity exists, but only with strict risk control."),
+        ("ANALYTICS", "Ask the viewers which side they are on, in one sentence.",
+         "Which side are you on, Bull or Bear? Tell us in the comments."),
+    ]
+    out = []
+    for who, task, fb in plan:
+        t = short_line(who, task, topic, facts)
+        if t is None:
+            print("short line fallback for", who)
+            t = fb
+        elif who in ("BULL", "BEAR") and "[S" not in t and task.startswith("Explain"):
+            t += " [S1]"
+        out.append({"who": who, "text": t})
+    return out
 
 
 def clean(t, names):
